@@ -1932,9 +1932,9 @@ type TrillianLogClient interface {
 	// the response will include the known log root and an empty proof.
 	GetConsistencyProof(ctx context.Context, in *GetConsistencyProofRequest, opts ...grpc.CallOption) (*GetConsistencyProofResponse, error)
 	// Returns the latest signed log root for a given tree. Corresponds to the
-	// ReadOnlyLogTreeTX.LatestSignedLogRoot storage interface.  The server will
-	// return InvalidArgument if first_tree_size is greater than the
-	// LatestSignedLogRoot available to that server.
+	// ReadOnlyLogTreeTX.LatestSignedLogRoot storage interface.  If
+	// first_tree_size > LatestSignedLogRoot, the server will return rpc code
+	// Unavailable with the latest SignedLogRoot attached in the status details.
 	GetLatestSignedLogRoot(ctx context.Context, in *GetLatestSignedLogRootRequest, opts ...grpc.CallOption) (*GetLatestSignedLogRootResponse, error)
 	// Returns the total number of leaves that have been integrated into the
 	// given tree. Corresponds to the ReadOnlyLogTreeTX.GetSequencedLeafCount
@@ -2112,9 +2112,9 @@ type TrillianLogServer interface {
 	// the response will include the known log root and an empty proof.
 	GetConsistencyProof(context.Context, *GetConsistencyProofRequest) (*GetConsistencyProofResponse, error)
 	// Returns the latest signed log root for a given tree. Corresponds to the
-	// ReadOnlyLogTreeTX.LatestSignedLogRoot storage interface.  The server will
-	// return InvalidArgument if first_tree_size is greater than the
-	// LatestSignedLogRoot available to that server.
+	// ReadOnlyLogTreeTX.LatestSignedLogRoot storage interface.  If
+	// first_tree_size > LatestSignedLogRoot, the server will return rpc code
+	// Unavailable with the latest SignedLogRoot attached in the status details.
 	GetLatestSignedLogRoot(context.Context, *GetLatestSignedLogRootRequest) (*GetLatestSignedLogRootResponse, error)
 	// Returns the total number of leaves that have been integrated into the
 	// given tree. Corresponds to the ReadOnlyLogTreeTX.GetSequencedLeafCount
