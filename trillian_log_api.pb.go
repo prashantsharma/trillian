@@ -1933,8 +1933,9 @@ type TrillianLogClient interface {
 	GetConsistencyProof(ctx context.Context, in *GetConsistencyProofRequest, opts ...grpc.CallOption) (*GetConsistencyProofResponse, error)
 	// Returns the latest signed log root for a given tree. Corresponds to the
 	// ReadOnlyLogTreeTX.LatestSignedLogRoot storage interface.  If
-	// first_tree_size > LatestSignedLogRoot, the server will return rpc code
-	// Unavailable with the latest SignedLogRoot attached in the status details.
+	// first_tree_size > latest SignedLogRoot.tree_size, the server will return
+	// gRPC `codes.Unavailable` with the latest SignedLogRoot attached in the
+	// gRPC status.Details().
 	GetLatestSignedLogRoot(ctx context.Context, in *GetLatestSignedLogRootRequest, opts ...grpc.CallOption) (*GetLatestSignedLogRootResponse, error)
 	// Returns the total number of leaves that have been integrated into the
 	// given tree. Corresponds to the ReadOnlyLogTreeTX.GetSequencedLeafCount
@@ -2113,8 +2114,9 @@ type TrillianLogServer interface {
 	GetConsistencyProof(context.Context, *GetConsistencyProofRequest) (*GetConsistencyProofResponse, error)
 	// Returns the latest signed log root for a given tree. Corresponds to the
 	// ReadOnlyLogTreeTX.LatestSignedLogRoot storage interface.  If
-	// first_tree_size > LatestSignedLogRoot, the server will return rpc code
-	// Unavailable with the latest SignedLogRoot attached in the status details.
+	// first_tree_size > latest SignedLogRoot.tree_size, the server will return
+	// gRPC `codes.Unavailable` with the latest SignedLogRoot attached in the
+	// gRPC status.Details().
 	GetLatestSignedLogRoot(context.Context, *GetLatestSignedLogRootRequest) (*GetLatestSignedLogRootResponse, error)
 	// Returns the total number of leaves that have been integrated into the
 	// given tree. Corresponds to the ReadOnlyLogTreeTX.GetSequencedLeafCount
