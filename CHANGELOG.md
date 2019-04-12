@@ -4,6 +4,12 @@
 
 Not yet released; provisionally v2.0.0 (may change).
 
+### Better Server Skew Behavior
+
+GetLatestSignedLogRoot will return `codes.Unavailable` when the requested
+`tree_size` is unavailable. The current SLR will be returned in the error
+details.
+
 ### Introduce BatchInclusionProof function
 
 Added a batch version of the Merkle Tree InclusionProof function.
