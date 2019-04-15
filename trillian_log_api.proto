@@ -85,7 +85,7 @@ service TrillianLog {
   // ReadOnlyLogTreeTX.LatestSignedLogRoot storage interface.  If
   // first_tree_size > latest SignedLogRoot.tree_size, the server will return
   // gRPC `codes.Unavailable` with the latest SignedLogRoot attached in the
-  // gRPC status.Details().
+  // google.rpc.Status.details.
   rpc GetLatestSignedLogRoot(GetLatestSignedLogRootRequest)
       returns (GetLatestSignedLogRootResponse) {
     option (google.api.http) = {
