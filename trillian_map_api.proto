@@ -76,7 +76,7 @@ message GetMapLeavesByRevisionRequest {
   int64 revision = 3;
 }
 
-message GetLastInRangeRequest {
+message GetLastInRangeByRevisionRequest {
   int64 map_id = 1;
   int64 revision = 2;
   // [start_index, end_index)
@@ -142,8 +142,8 @@ service TrillianMap {
   rpc GetLeaves(GetMapLeavesRequest) returns (GetMapLeavesResponse) {}
   rpc GetLeavesByRevision(GetMapLeavesByRevisionRequest)
       returns (GetMapLeavesResponse) {}
-  // GetLastInRange returns the last leaf in a requested range.
-  rpc GetLastInRange(GetLastInRangeRequest) returns (MapLeaf) {}
+  // GetLastInRangeByRevision returns the last leaf in a requested range.
+  rpc GetLastInRangeByRevision(GetLastInRangeByRevisionRequest) returns (MapLeaf) {}
   // SetLeaves sets the values for the provided leaves, and returns the new map
   // root if successful. Note that if a SetLeaves request fails for a
   // server-side reason (i.e. not an invalid request), the API user is required
