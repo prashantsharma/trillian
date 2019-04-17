@@ -143,11 +143,7 @@ service TrillianMap {
   rpc GetLeavesByRevision(GetMapLeavesByRevisionRequest)
       returns (GetMapLeavesResponse) {}
   // GetLastInRange returns the last leaf in a requested range.
-  rpc GetLastInRange(GetLastInRangeRequest) returns (MapLeaf) {
-    option (google.api.http) = {
-      get: "/v1beta1/maps/{map_id}/roots/{revision}/leaves:last_in_range"
-    };
-  }
+  rpc GetLastInRange(GetLastInRangeRequest) returns (MapLeaf) {}
   // SetLeaves sets the values for the provided leaves, and returns the new map
   // root if successful. Note that if a SetLeaves request fails for a
   // server-side reason (i.e. not an invalid request), the API user is required
