@@ -130,31 +130,31 @@ func NewMultiFakeNodeReaderFromLeaves(batches []LeafBatch) *MultiFakeNodeReader 
 		}
 
 		lastBatchRevision = batch.TreeRevision
-		nodeMap := make(map[string]storage.Node)
+		nodeMap := make(map[compact.NodeID][]byte)
+		store := func(id compact.NodeID, hash []byte) { nodeMap[id] = hash }
 		for _, leaf := range batch.Leaves {
-			// We're only interested in the side effects of adding leaves - the node updates
-			tree.AddLeaf([]byte(leaf), func(depth int, index int64, hash []byte) error {
-				nID, err := storage.NewNodeIDForTreeCoords(int64(depth), index, 64)
-
-				if err != nil {
-					return fmt.Errorf("failed to create a nodeID for tree - should not happen d:%d i:%d",
-						depth, index)
-				}
-
-				nodeMap[nID.String()] = storage.Node{NodeID: nID, NodeRevision: batch.TreeRevision, Hash: hash}
-				return nil
-			})
+			// Only interested in side effects of AppendLeaf - the node updates.
+			tree.AppendLeaf([]byte(leaf), store)
 		}
+		// TODO(pavelkalinnikov): Handle errors (although they should not happen).
+		tree.CalculateRoot(store) // Store the ephemeral nodes as well.
 
 		// Sanity check the tree root hash against the one we expect to see.
-		if got, want := tree.CurrentRoot(), batch.ExpectedRoot; !bytes.Equal(got, want) {
+		root, err := tree.CurrentRoot()
+		if err != nil {
+			// TODO(pavelkalinnikov): Use testing.T.Fatalf instead of panic.
+			panic(fmt.Errorf("CurrentRoot: %v", err))
+		}
+		if got, want := root, batch.ExpectedRoot; !bytes.Equal(got, want) {
 			panic(fmt.Errorf("NewMultiFakeNodeReaderFromLeaves() got root: %x, want: %x (%v)", got, want, batch))
 		}
 
 		// Unroll the update map to []storage.Node to retain the most recent node update within
 		// the batch for each ID. Use that to create a new FakeNodeReader.
 		nodes := make([]storage.Node, 0, len(nodeMap))
-		for _, node := range nodeMap {
+		for id, hash := range nodeMap {
+			nID := MustCreateNodeIDForTreeCoords(int64(id.Level), int64(id.Index), 64)
+			node := storage.Node{NodeID: nID, Hash: hash, NodeRevision: batch.TreeRevision}
 			nodes = append(nodes, node)
 		}
 

@@ -88,7 +88,9 @@ if err != nil {
 }
 ```
 
-### Configurable number of connections for MySQL
+### MySQL changes
+
+#### Configurable number of connections for MySQL
 
 Two new flags have been added that limit connections to MySQL database servers:
 
@@ -99,6 +101,11 @@ By default, there is no maximum number of database connections. However, the
 database server will likely impose limits on the number of connections. The
 default limit on idle connections is controlled by
 [Go's `sql` package](https://golang.org/pkg/database/sql/#DB.SetMaxIdleConns).
+
+#### Enfored no concurrent use of MySQL tx
+
+Concurrently using a single MySQL transaction can cause the driver to error
+out, so we now attempt to prevent this from happening.
 
 ### Removal of length limits for a tree's `display_name` and `description`
 
@@ -130,6 +137,7 @@ The [db\_server Docker image](examples/deployment/docker/db_server/Dockerfile)
 is now based on
 [the MySQL 5.7 image from the Google Cloud Marketplace](https://console.cloud.google.com/marketplace/details/google/mysql5),
 rather than the [official MySQL 5.7 image](https://hub.docker.com/_/mysql).
+This Dockerfile supercedes Dockerfile.db, which has been removed.
 
 There is now a [mysql.cnf file](examples/deployment/docker/db_server/mysql.cnf)
 alongside the Dockerfile that makes it easy to build the image with a custom
@@ -153,6 +161,8 @@ testing and experimental purposes:
 docker-compose -f examples/deployment/docker-compose.yml up
 ```
 
+Docker Compose v3.1 or higher is required.
+
 The Terraform, Kubernetes and Docker configuration files, as well as various
 scripts, all now use the same, consistently-named environment variables for
 MySQL-related data (e.g. `MYSQL_DATABASE`). The variable names are based on
@@ -168,7 +178,13 @@ Quota metrics with specs of the form `users/<user>/read` and
 `users/<user>/write` are no longer exported by the Trillian binaries (as they
 lead to excessive storage requirements for Trillian metrics).
 
-### Fix Operation Loop Hang
+### Resilience improvements in `log_signer`
+
+#### Add timeout to sequencing loop
+
+Added a timeout to the context in the sequencing loop, with a default of 60s.
+
+#### Fix Operation Loop Hang
 
 Resolved a bug that would hide errors and cause the `OperationLoop` to hang
 until process exit if any error occurred.
@@ -185,6 +201,11 @@ The CompactMerkleTree has been moved from `github.com/google/trillian/merkle` to
 
 A new powerful data structure named Compact Range has been added to the same
 package. It is a generalization of the previous compact Merkle tree structure.
+
+`AddLeaf*` methods of `compact.Tree` have been replaced with the corresponding
+`AppendLeaf*` methods, which do not report hashes of ephemeral nodes along the
+right border of the Merkle tree. The `CalculateRoot` method should be used in
+conjunction with appends if the caller needs to get those hashes.
 
 ### Storage API changes
 

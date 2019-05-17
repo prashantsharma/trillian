@@ -16,6 +16,7 @@ package compact
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"math/bits"
@@ -25,13 +26,17 @@ import (
 	"testing"
 
 	"github.com/google/trillian/merkle/rfc6962"
-	"github.com/google/trillian/testonly"
 )
 
 var (
 	hashChildren = rfc6962.DefaultHasher.HashChildren
 	factory      = &RangeFactory{Hash: hashChildren}
 )
+
+// leafData returns test leaf data that depends on the passed in leaf index.
+func leafData(index uint64) []byte {
+	return []byte(fmt.Sprintf("data: %d", index))
+}
 
 // treeNode represents a Merkle tree node which roots a full binary subtree.
 type treeNode struct {
@@ -52,9 +57,9 @@ func newTree(t *testing.T, size uint64) (*tree, VisitFn) {
 	nodes := make([][]treeNode, levels)
 	tr := &tree{size: size, nodes: nodes}
 	// Attach a visitor to the nodes and the testing handler.
-	visit := func(level uint, index uint64, hash []byte) {
-		if err := tr.visit(level, index, hash); err != nil {
-			t.Errorf("visit(%d,%d): %v", level, index, err)
+	visit := func(id NodeID, hash []byte) {
+		if err := tr.visit(id.Level, id.Index, hash); err != nil {
+			t.Errorf("visit %+v: %v", id, err)
 		}
 	}
 
@@ -63,7 +68,7 @@ func newTree(t *testing.T, size uint64) (*tree, VisitFn) {
 	}
 	// Compute leaf hashes.
 	for i := uint64(0); i < size; i++ {
-		nodes[0][i].hash = hashLeaf([]byte(fmt.Sprintf("data: %d", i)))
+		nodes[0][i].hash = hashLeaf(leafData(i))
 	}
 	// Compute internal node hashes.
 	for lvl := 1; lvl < levels; lvl++ {
@@ -163,7 +168,7 @@ func TestMergeForward(t *testing.T) {
 	rng := factory.NewEmptyRange(0)
 	tree.verifyRange(t, rng, true)
 	for i := uint64(0); i < numNodes; i++ {
-		visit(0, i, tree.leaf(i))
+		visit(NewNodeID(0, i), tree.leaf(i))
 		rng.Append(tree.leaf(i), visit)
 		tree.verifyRange(t, rng, true)
 	}
@@ -177,7 +182,7 @@ func TestMergeBackwards(t *testing.T) {
 	rng := factory.NewEmptyRange(numNodes)
 	tree.verifyRange(t, rng, true)
 	for i := numNodes; i > 0; i-- {
-		visit(0, i-1, tree.leaf(i-1))
+		visit(NewNodeID(0, i-1), tree.leaf(i-1))
 		prepend := factory.NewEmptyRange(i - 1)
 		tree.verifyRange(t, prepend, true)
 		prepend.Append(tree.leaf(i-1), visit)
@@ -204,7 +209,7 @@ func TestMergeInBatches(t *testing.T) {
 		rng := factory.NewEmptyRange(i)
 		tree.verifyRange(t, rng, true)
 		for node := i; node < i+batch && node < numNodes; node++ {
-			visit(0, node, tree.leaf(node))
+			visit(NewNodeID(0, node), tree.leaf(node))
 			if err := rng.Append(tree.leaf(node), visit); err != nil {
 				t.Fatalf("Append: %v", err)
 			}
@@ -237,7 +242,7 @@ func TestMergeRandomly(t *testing.T) {
 			mergeAll = func(begin, end uint64) *Range {
 				rng := factory.NewEmptyRange(begin)
 				if begin+1 == end {
-					visit(0, begin, tree.leaf(begin))
+					visit(NewNodeID(0, begin), tree.leaf(begin))
 					if err := rng.Append(tree.leaf(begin), visit); err != nil {
 						t.Fatalf("Append(%d): %v", begin, err)
 					}
@@ -362,7 +367,7 @@ func TestGetRootHash(t *testing.T) {
 			for i := uint64(0); i < size; i++ {
 				rng.Append(tree.leaf(i), nil)
 			}
-			root, err := rng.GetRootHash()
+			root, err := rng.GetRootHash(nil)
 			if err != nil {
 				t.Fatalf("GetRootHash: %v", err)
 			}
@@ -374,47 +379,92 @@ func TestGetRootHash(t *testing.T) {
 
 	// Should accept only [0, N) ranges.
 	rng := factory.NewEmptyRange(10)
-	if _, err := rng.GetRootHash(); err == nil {
+	if _, err := rng.GetRootHash(nil); err == nil {
 		t.Error("GetRootHash succeeded unexpectedly")
 	}
 }
 
 func TestGetRootHashGolden(t *testing.T) {
+	type node struct {
+		level uint
+		index uint64
+		hash  string
+	}
+
 	// TODO(pavelkalinnikov): Values are copied from tree_test. Commonize them.
 	for _, tc := range []struct {
-		size     int
-		wantRoot []byte
+		size      int
+		wantRoot  string
+		wantNodes []node
 	}{
-		{10, testonly.MustDecodeBase64("VjWMPSYNtCuCNlF/RLnQy6HcwSk6CIipfxm+hettA+4=")},
-		{15, testonly.MustDecodeBase64("j4SulYmocFuxdeyp12xXCIgK6PekBcxzAIj4zbQzNEI=")},
-		{16, testonly.MustDecodeBase64("c+4Uc6BCMOZf/v3NZK1kqTUJe+bBoFtOhP+P3SayKRE=")},
-		{100, testonly.MustDecodeBase64("dUh9hYH88p0CMoHkdr1wC2szbhcLAXOejWpINIooKUY=")},
-		{255, testonly.MustDecodeBase64("SmdsuKUqiod3RX2jyF2M6JnbdE4QuTwwipfAowI4/i0=")},
-		{256, testonly.MustDecodeBase64("qFI0t/tZ1MdOYgyPpPzHFiZVw86koScXy9q3FU5casA=")},
-		{1000, testonly.MustDecodeBase64("RXrgb8xHd55Y48FbfotJwCbV82Kx22LZfEbmBGAvwlQ=")},
-		{4095, testonly.MustDecodeBase64("cWRFdQhPcjn9WyBXE/r1f04ejxIm5lvg40DEpRBVS0w=")},
-		{4096, testonly.MustDecodeBase64("6uU/phfHg1n/GksYT6TO9aN8EauMCCJRl3dIK0HDs2M=")},
-		{10000, testonly.MustDecodeBase64("VZcav65F9haHVRk3wre2axFoBXRNeUh/1d9d5FQfxIg=")},
-		{65535, testonly.MustDecodeBase64("iPuVYJhP6SEE4gUFp8qbafd2rYv9YTCDYqAxCj8HdLM=")},
+		{
+			size:      10,
+			wantRoot:  "VjWMPSYNtCuCNlF/RLnQy6HcwSk6CIipfxm+hettA+4=",
+			wantNodes: []node{{4, 0, "VjWMPSYNtCuCNlF/RLnQy6HcwSk6CIipfxm+hettA+4="}},
+		},
+		{size: 15, wantRoot: "j4SulYmocFuxdeyp12xXCIgK6PekBcxzAIj4zbQzNEI="},
+		{size: 16, wantRoot: "c+4Uc6BCMOZf/v3NZK1kqTUJe+bBoFtOhP+P3SayKRE=", wantNodes: []node{}},
+		{
+			size:     100,
+			wantRoot: "dUh9hYH88p0CMoHkdr1wC2szbhcLAXOejWpINIooKUY=",
+			wantNodes: []node{
+				{6, 1, "/K5I3bQ6Wz/beVi9IFKizZ073WqI8kGqstdkbmMcTXI="},
+				{7, 0, "dUh9hYH88p0CMoHkdr1wC2szbhcLAXOejWpINIooKUY="},
+			},
+		},
+		{
+			size:     255,
+			wantRoot: "SmdsuKUqiod3RX2jyF2M6JnbdE4QuTwwipfAowI4/i0=",
+			wantNodes: []node{
+				{2, 63, "EphrHrAU2E+H65CW1o2SwiJVA1dNragVhsMsOkyBdZ4="},
+				{3, 31, "fwen9eGNKOdGYC7L1GSwMKBlyjIIZBlsKVkmPGtsZEY="},
+				{4, 15, "Iq5blg5fdl93qbEUzBBEiGMoP7zyzbwf14JuB5YBidM="},
+				{5, 7, "D6s+gn79wNsgmdvBv0fVIYCougsU+PUSdtLGrWGmyO4="},
+				{6, 3, "swSuozoE2E7iTV9cnNGcnjbLEeDq+5ep2hRJuI0pTtI="},
+				{7, 1, "xv1RcZ3JpQusUjlsGQzsV9kWuITo3aLNpEsKymbFhak="},
+				{8, 0, "SmdsuKUqiod3RX2jyF2M6JnbdE4QuTwwipfAowI4/i0="},
+			},
+		},
+		{size: 256, wantRoot: "qFI0t/tZ1MdOYgyPpPzHFiZVw86koScXy9q3FU5casA=", wantNodes: []node{}},
+		{
+			size:     1000,
+			wantRoot: "RXrgb8xHd55Y48FbfotJwCbV82Kx22LZfEbmBGAvwlQ=",
+			wantNodes: []node{
+				{6, 15, "CBbiN/le+CpZNxEmCVIgfQSl/ZTapYxUOsdKTkiVjtc="},
+				{7, 7, "npfCeOdllUJZLLRbvEkxlwY7enS6pRlChKVTJjHcevI="},
+				{8, 3, "5MVDHIWhLErkcLgceSnxZWOTG04QlhIkm3aUEOQLpWw="},
+				{9, 1, "6EoN2SheMl5oA3qymXw1Ltcp1ku/INU+rBqEe2+jIjI="},
+				{10, 0, "RXrgb8xHd55Y48FbfotJwCbV82Kx22LZfEbmBGAvwlQ="},
+			},
+		},
+		{size: 4095, wantRoot: "cWRFdQhPcjn9WyBXE/r1f04ejxIm5lvg40DEpRBVS0w="},
+		{size: 4096, wantRoot: "6uU/phfHg1n/GksYT6TO9aN8EauMCCJRl3dIK0HDs2M=", wantNodes: []node{}},
+		{size: 10000, wantRoot: "VZcav65F9haHVRk3wre2axFoBXRNeUh/1d9d5FQfxIg="},
+		{size: 65535, wantRoot: "iPuVYJhP6SEE4gUFp8qbafd2rYv9YTCDYqAxCj8HdLM="},
 	} {
 		t.Run(fmt.Sprintf("size:%v", tc.size), func(t *testing.T) {
 			rng := factory.NewEmptyRange(0)
 			for i := 0; i < tc.size; i++ {
 				data := []byte{byte(i & 0xff), byte((i >> 8) & 0xff)}
-				hash, err := rfc6962.DefaultHasher.HashLeaf(data)
-				if err != nil {
-					t.Fatalf("HashLeaf(%x): %v", data, err)
-				}
+				hash := hashLeaf(data)
 				if err := rng.Append(hash, nil); err != nil {
 					t.Fatalf("Append(%d): %v", i, err)
 				}
 			}
-			got, err := rng.GetRootHash()
+			visited := make([]node, 0, len(tc.wantNodes))
+			hash, err := rng.GetRootHash(func(id NodeID, hash []byte) {
+				visited = append(visited, node{level: id.Level, index: id.Index, hash: base64.StdEncoding.EncodeToString(hash)})
+			})
 			if err != nil {
 				t.Fatalf("GetRootHash: %v", err)
 			}
-			if !bytes.Equal(got, tc.wantRoot) {
-				t.Errorf("root hash mismatch: got %x, want %x", got, tc.wantRoot)
+			if got, want := base64.StdEncoding.EncodeToString(hash), tc.wantRoot; got != want {
+				t.Errorf("root hash mismatch: got %q, want %q", got, want)
+			}
+			if tc.wantNodes != nil {
+				if !reflect.DeepEqual(visited, tc.wantNodes) {
+					t.Errorf("visited:\n%v\nwant:\n%v", visited, tc.wantNodes)
+				}
 			}
 		})
 	}
@@ -652,11 +702,7 @@ func TestEqual(t *testing.T) {
 }
 
 func hashLeaf(data []byte) []byte {
-	hash, err := rfc6962.DefaultHasher.HashLeaf(data)
-	if err != nil {
-		panic(fmt.Sprintf("rfc6962: HashLeaf: %v", err))
-	}
-	return hash
+	return rfc6962.DefaultHasher.HashLeaf(data)
 }
 
 func shorten(hash []byte) []byte {

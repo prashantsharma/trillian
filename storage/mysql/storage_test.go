@@ -87,7 +87,7 @@ func TestLogNodeRoundTripMultiSubtree(t *testing.T) {
 	s := NewLogStorage(DB, nil)
 
 	const writeRevision = int64(100)
-	nodesToStore, err := createLogNodesForTreeAtSize(871, writeRevision)
+	nodesToStore, err := createLogNodesForTreeAtSize(t, 871, writeRevision)
 	if err != nil {
 		t.Fatalf("failed to create test tree: %v", err)
 	}
@@ -151,29 +151,30 @@ func createSomeNodes() []storage.Node {
 	return r
 }
 
-func createLogNodesForTreeAtSize(ts, rev int64) ([]storage.Node, error) {
+func createLogNodesForTreeAtSize(t *testing.T, ts, rev int64) ([]storage.Node, error) {
 	tree := compact.NewTree(rfc6962.New(crypto.SHA256))
-	nodeMap := make(map[string]storage.Node)
+	nodeMap := make(map[compact.NodeID][]byte)
+	store := func(id compact.NodeID, hash []byte) { nodeMap[id] = hash }
 	for l := 0; l < int(ts); l++ {
-		// We're only interested in the side effects of adding leaves - the node updates
-		if _, _, err := tree.AddLeaf([]byte(fmt.Sprintf("Leaf %d", l)), func(depth int, index int64, hash []byte) error {
-			nID, err := storage.NewNodeIDForTreeCoords(int64(depth), index, 64)
-			if err != nil {
-				return fmt.Errorf("failed to create a nodeID for tree - should not happen d:%d i:%d",
-					depth, index)
-			}
-
-			nodeMap[nID.String()] = storage.Node{NodeID: nID, NodeRevision: rev, Hash: hash}
-			return nil
-		}); err != nil {
+		// Only interested in side effects of AppendLeaf - the node updates.
+		if _, err := tree.AppendLeaf([]byte(fmt.Sprintf("Leaf %d", l)), store); err != nil {
 			return nil, err
 		}
+	}
+	// Store the ephemeral nodes as well.
+	if _, err := tree.CalculateRoot(store); err != nil {
+		return nil, err
 	}
 
 	// Unroll the map, which has deduped the updates for us and retained the latest
 	nodes := make([]storage.Node, 0, len(nodeMap))
-	for _, v := range nodeMap {
-		nodes = append(nodes, v)
+	for id, hash := range nodeMap {
+		nID, err := storage.NewNodeIDForTreeCoords(int64(id.Level), int64(id.Index), 64)
+		if err != nil {
+			t.Fatalf("failed to create NodeID for %+v: %v", id, err)
+		}
+		node := storage.Node{NodeID: nID, Hash: hash, NodeRevision: rev}
+		nodes = append(nodes, node)
 	}
 
 	return nodes, nil
@@ -290,6 +291,5 @@ func TestMain(m *testing.M) {
 	DB = openTestDBOrDie()
 	defer DB.Close()
 	cleanTestDB(DB)
-	ec := m.Run()
-	os.Exit(ec)
+	os.Exit(m.Run())
 }
