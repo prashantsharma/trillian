@@ -771,15 +771,18 @@ The API supports sequencing in the Trillian Log Sequencer.
 <a name="trillian.GetLastInRangeByRevisionRequest"></a>
 
 ### GetLastInRangeByRevisionRequest
-
+GetLastInRangeByRevisionRequest specifies a range in the map at a revision
+The range is defined as the entire subtree below a particular point in the 
+merkle tree. Another way of saying this is that the range matches all leaves
+that share a common prefix of `prefix_bits` with index.
 
 
 | Field | Type | Label | Description |
 | ----- | ---- | ----- | ----------- |
 | map_id | [int64](#int64) |  |  |
 | revision | [int64](#int64) |  |  |
-| start_index | [bytes](#bytes) |  | [start_index, end_index) |
-| end_index | [bytes](#bytes) |  |  |
+| index | [bytes](#bytes) |  | index is the location of a leaf in the map. |
+| prefix_bits | [int32](#int32) |  | prefix_bits is the number of bits include |
 
 
 
