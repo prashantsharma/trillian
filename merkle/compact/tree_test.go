@@ -17,44 +17,48 @@ package compact
 import (
 	"bytes"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"math/bits"
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/google/trillian/merkle"
 	"github.com/google/trillian/merkle/rfc6962"
-	"github.com/google/trillian/storage"
+	to "github.com/google/trillian/merkle/testonly"
 	"github.com/google/trillian/testonly"
 	"github.com/kylelemons/godebug/pretty"
 )
 
-// This check ensures that the compact Merkle tree contains the correct set of
-// nodes, i.e. the node on level i is present iff i-th bit of tree size is 1.
-func checkUnusedNodesInvariant(t *Tree) error {
-	size := t.size
-	sizeBits := bits.Len64(uint64(size))
-	if got, want := len(t.nodes), sizeBits; got != want {
-		return fmt.Errorf("nodes mismatch: have %v nodes, want %v", got, want)
+// checkSizeInvariant ensures that the compact Merkle tree has the right number
+// of non-empty node hashes.
+func checkSizeInvariant(t *Tree) error {
+	size := uint64(t.Size())
+	hashes := t.hashes()
+	if got, want := len(hashes), bits.OnesCount64(size); got != want {
+		return fmt.Errorf("hashes mismatch: have %v hashes, want %v", got, want)
 	}
-	for level := 0; level < sizeBits; level++ {
-		if size&1 == 1 {
-			if t.nodes[level] == nil {
-				return fmt.Errorf("missing node at level %d", level)
-			}
-		} else if t.nodes[level] != nil {
-			return fmt.Errorf("unexpected node at level %d", level)
+	for i, hash := range hashes {
+		if len(hash) == 0 {
+			return fmt.Errorf("missing node hash at index %d", i)
 		}
-		size >>= 1
 	}
 	return nil
 }
 
+func mustGetRoot(t *testing.T, mt *Tree) []byte {
+	t.Helper()
+	hash, err := mt.CurrentRoot()
+	if err != nil {
+		t.Fatalf("CurrentRoot: %v", err)
+	}
+	return hash
+}
+
 func TestAddingLeaves(t *testing.T) {
-	inputs := testonly.MerkleTreeLeafTestInputs()
-	roots := testonly.MerkleTreeLeafTestRootHashes()
-	hashes := testonly.CompactMerkleTreeLeafTestNodeHashes()
+	inputs := to.LeafInputs()
+	roots := to.RootHashes()
+	hashes := to.CompactTrees()
 
 	// Test the "same" thing in different ways, to ensure than any lazy update
 	// strategy being employed by the implementation doesn't affect the
@@ -75,28 +79,26 @@ func TestAddingLeaves(t *testing.T) {
 			idx := 0
 			for _, br := range tc.breaks {
 				for ; idx < br; idx++ {
-					if _, _, err := tree.AddLeaf(inputs[idx], func(int, int64, []byte) error {
-						return nil
-					}); err != nil {
-						t.Fatalf("AddLeaf: %v", err)
+					if _, err := tree.AppendLeaf(inputs[idx], nil); err != nil {
+						t.Fatalf("AppendLeaf: %v", err)
 					}
-					if err := checkUnusedNodesInvariant(tree); err != nil {
-						t.Fatalf("UnusedNodesInvariant check failed: %v", err)
+					if err := checkSizeInvariant(tree); err != nil {
+						t.Fatalf("SizeInvariant check failed: %v", err)
 					}
 				}
 				if got, want := tree.Size(), int64(br); got != want {
 					t.Errorf("Size()=%d, want %d", got, want)
 				}
 				if br > 0 {
-					if got, want := tree.CurrentRoot(), roots[br-1]; !bytes.Equal(got, want) {
-						t.Errorf("CurrentRoot()=%v, want %v", got, want)
+					if got, want := mustGetRoot(t, tree), roots[br]; !bytes.Equal(got, want) {
+						t.Errorf("root=%v, want %v", got, want)
 					}
-					if diff := pretty.Compare(tree.Hashes(), hashes[br-1]); diff != "" {
-						t.Errorf("post-Hashes() diff:\n%v", diff)
+					if diff := pretty.Compare(tree.hashes(), hashes[br]); diff != "" {
+						t.Errorf("post-hashes() diff:\n%v", diff)
 					}
 				} else {
-					if got, want := tree.CurrentRoot(), testonly.EmptyMerkleTreeRootHash(); !bytes.Equal(got, want) {
-						t.Errorf("CurrentRoot()=%x, want %x (empty)", got, want)
+					if got, want := mustGetRoot(t, tree), to.EmptyRootHash(); !bytes.Equal(got, want) {
+						t.Errorf("root=%x, want %x (empty)", got, want)
 					}
 				}
 			}
@@ -104,89 +106,79 @@ func TestAddingLeaves(t *testing.T) {
 	}
 }
 
-func failingGetNodeFunc(_ int, _ int64) ([]byte, error) {
-	return []byte{}, errors.New("bang")
+func TestAppendLeaf(t *testing.T) {
+	for _, size := range []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 177, 765} {
+		t.Run(fmt.Sprintf("size:%d", size), func(t *testing.T) {
+			tree, visit := newTree(t, size)
+			mt := NewTree(rfc6962.DefaultHasher)
+			for i := uint64(0); i < size; i++ {
+				hash, err := mt.AppendLeaf(leafData(i), visit)
+				if err != nil {
+					t.Fatalf("AppendLeaf(%d): %v", i, err)
+				}
+				if want := tree.leaf(i); !bytes.Equal(hash, want) {
+					t.Fatalf("Leaf hash mismatch: got %x, want %x", hash, want)
+				}
+			}
+			// Note: The passed in Range is not valid, it is a hack.
+			tree.verifyAllVisited(t, &Range{begin: 0, end: size})
+		})
+	}
 }
 
 // This returns something that won't result in a valid root hash match, doesn't really
 // matter what it is but it must be correct length for an SHA256 hash as if it was real
-func fixedHashGetNodeFunc(_ int, _ int64) ([]byte, error) {
-	return []byte("12345678901234567890123456789012"), nil
-}
-
-func TestLoadingTreeFailsNodeFetch(t *testing.T) {
-	_, err := NewTreeWithState(rfc6962.DefaultHasher, 237, failingGetNodeFunc, []byte("notimportant"))
-
-	if err == nil || !strings.Contains(err.Error(), "bang") {
-		t.Errorf("Did not return correctly on failed node fetch: %v", err)
+func fixedHashGetNodesFunc(ids []NodeID) [][]byte {
+	hashes := make([][]byte, len(ids))
+	for i := range ids {
+		hashes[i] = []byte("12345678901234567890123456789012")
 	}
+	return hashes
 }
 
 func TestLoadingTreeFailsBadRootHash(t *testing.T) {
+	hashes := fixedHashGetNodesFunc(TreeNodes(237))
+
 	// Supply a root hash that can't possibly match the result of the SHA 256 hashing on our dummy
 	// data
-	_, err := NewTreeWithState(rfc6962.DefaultHasher, 237, fixedHashGetNodeFunc, []byte("nomatch!nomatch!nomatch!nomatch!"))
-	_, ok := err.(RootHashMismatchError)
-
-	if err == nil || !ok {
-		t.Errorf("Did not return correct error type on root mismatch: %v", err)
+	_, err := NewTreeWithState(rfc6962.DefaultHasher, 237, hashes, []byte("nomatch!nomatch!nomatch!nomatch!"))
+	if err == nil || !strings.HasPrefix(err.Error(), "root hash mismatch") {
+		t.Errorf("Did not return correct error on root mismatch: %v", err)
 	}
-	if !strings.Contains(err.Error(), "mismatch") {
-		t.Errorf("Error %q doesn't mention mismatch", err.Error())
-	}
-}
-
-func nodeKey(d int, i int64) (string, error) {
-	n, err := storage.NewNodeIDForTreeCoords(int64(d), i, 64)
-	if err != nil {
-		return "", err
-	}
-	return n.String(), nil
 }
 
 func TestCompactVsFullTree(t *testing.T) {
 	imt := merkle.NewInMemoryMerkleTree(rfc6962.DefaultHasher)
-	nodes := make(map[string][]byte)
+	nodes := make(map[NodeID][]byte)
+
+	getHashes := func(ids []NodeID) [][]byte {
+		hashes := make([][]byte, len(ids))
+		for i, id := range ids {
+			hashes[i] = nodes[id]
+		}
+		return hashes
+	}
 
 	for i := int64(0); i < 1024; i++ {
-		cmt, err := NewTreeWithState(
-			rfc6962.DefaultHasher,
-			imt.LeafCount(),
-			func(depth int, index int64) ([]byte, error) {
-				k, err := nodeKey(depth, index)
-				if err != nil {
-					t.Errorf("failed to create nodeID: %v", err)
-				}
-				h := nodes[k]
-				return h, nil
-			}, imt.CurrentRoot().Hash())
-
+		hashes := getHashes(TreeNodes(uint64(imt.LeafCount())))
+		cmt, err := NewTreeWithState(rfc6962.DefaultHasher, imt.LeafCount(), hashes, imt.CurrentRoot().Hash())
 		if err != nil {
 			t.Errorf("interation %d: failed to create CMT with state: %v", i, err)
 		}
-		if a, b := imt.CurrentRoot().Hash(), cmt.CurrentRoot(); !bytes.Equal(a, b) {
+		if a, b := imt.CurrentRoot().Hash(), mustGetRoot(t, cmt); !bytes.Equal(a, b) {
 			t.Errorf("iteration %d: Got in-memory root of %v, but compact tree has root %v", i, a, b)
 		}
 
 		newLeaf := []byte(fmt.Sprintf("Leaf %d", i))
 
-		iSeq, iHash, err := imt.AddLeaf(newLeaf)
-		if err != nil {
-			t.Errorf("AddLeaf(): %v", err)
-		}
-
-		cSeq, cHash, err := cmt.AddLeaf(newLeaf,
-			func(depth int, index int64, hash []byte) error {
-				k, err := nodeKey(depth, index)
-				if err != nil {
-					return fmt.Errorf("failed to create nodeID: %v", err)
-				}
-				nodes[k] = hash
-				return nil
-			})
+		iSeq, iHash := imt.AddLeaf(newLeaf)
+		cHash, err := cmt.AppendLeaf(newLeaf, func(id NodeID, hash []byte) {
+			nodes[id] = hash
+		})
 		if err != nil {
 			t.Fatalf("mt update failed: %v", err)
 		}
+		cSeq := cmt.Size() - 1 // The index of the last inserted leaf.
 
 		// In-Memory tree is 1-based for sequence numbers, since it's based on the original CT C++ impl.
 		if got, want := iSeq, i+1; got != want {
@@ -198,7 +190,7 @@ func TestCompactVsFullTree(t *testing.T) {
 		if a, b := iHash.Hash(), cHash; !bytes.Equal(a, b) {
 			t.Errorf("iteration %d: Got leaf hash %v from in-memory tree, but %v from compact tree", i, a, b)
 		}
-		if a, b := imt.CurrentRoot().Hash(), cmt.CurrentRoot(); !bytes.Equal(a, b) {
+		if a, b := imt.CurrentRoot().Hash(), mustGetRoot(t, cmt); !bytes.Equal(a, b) {
 			t.Errorf("iteration %d: Got in-memory root of %v, but compact tree has root %v", i, a, b)
 		}
 	}
@@ -207,23 +199,23 @@ func TestCompactVsFullTree(t *testing.T) {
 	cmt := NewTree(rfc6962.DefaultHasher)
 	for i := int64(0); i < imt.LeafCount(); i++ {
 		newLeaf := []byte(fmt.Sprintf("Leaf %d", i))
-		seq, _, err := cmt.AddLeaf(newLeaf, func(depth int, index int64, hash []byte) error {
-			return nil
-		})
+		_, err := cmt.AppendLeaf(newLeaf, nil)
 		if err != nil {
-			t.Fatalf("AddLeaf(%d)=_,_,%v, want _,_,nil", i, err)
+			t.Fatalf("AppendLeaf(%d)=_,_,%v, want _,_,nil", i, err)
 		}
-		if seq != i {
-			t.Fatalf("AddLeaf(%d)=%d, want %d", i, seq, i)
+		if got, want := cmt.Size(), i+1; got != want {
+			t.Fatalf("new tree size=%d, want %d", got, want)
 		}
 	}
-	if a, b := imt.CurrentRoot().Hash(), cmt.CurrentRoot(); !bytes.Equal(a, b) {
+	if a, b := imt.CurrentRoot().Hash(), mustGetRoot(t, cmt); !bytes.Equal(a, b) {
 		t.Errorf("got in-memory root of %v, but compact tree has root %v", a, b)
 	}
 }
 
 func TestRootHashForVariousTreeSizes(t *testing.T) {
-	tests := []struct {
+	b64e := func(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
+
+	for _, tc := range []struct {
 		size     int64
 		wantRoot []byte
 	}{
@@ -239,35 +231,77 @@ func TestRootHashForVariousTreeSizes(t *testing.T) {
 		{4096, testonly.MustDecodeBase64("6uU/phfHg1n/GksYT6TO9aN8EauMCCJRl3dIK0HDs2M=")},
 		{10000, testonly.MustDecodeBase64("VZcav65F9haHVRk3wre2axFoBXRNeUh/1d9d5FQfxIg=")},
 		{65535, testonly.MustDecodeBase64("iPuVYJhP6SEE4gUFp8qbafd2rYv9YTCDYqAxCj8HdLM=")},
-	}
-
-	b64e := func(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
-
-	for _, test := range tests {
-		tree := NewTree(rfc6962.DefaultHasher)
-		for i := int64(0); i < test.size; i++ {
-			l := []byte{byte(i & 0xff), byte((i >> 8) & 0xff)}
-			tree.AddLeaf(l, func(int, int64, []byte) error {
-				return nil
-			})
-		}
-		if gotRoot := tree.CurrentRoot(); !bytes.Equal(gotRoot, test.wantRoot) {
-			t.Errorf("Test (treesize=%v) got root %v, want %v", test.size, b64e(gotRoot), b64e(test.wantRoot))
-		}
-		t.Log(tree)
-		if isPerfectTree(test.size) {
-			// A perfect tree should have a single hash at the highest bit that is just
-			// the root hash.
-			hashes := tree.Hashes()
-			for i, got := range hashes {
-				var want []byte
-				if i == (len(hashes) - 1) {
-					want = tree.CurrentRoot()
+	} {
+		t.Run(fmt.Sprintf("size:%d", tc.size), func(t *testing.T) {
+			tree := NewTree(rfc6962.DefaultHasher)
+			for i := int64(0); i < tc.size; i++ {
+				l := []byte{byte(i & 0xff), byte((i >> 8) & 0xff)}
+				tree.AppendLeaf(l, nil)
+			}
+			if got, want := mustGetRoot(t, tree), tc.wantRoot; !bytes.Equal(got, want) {
+				t.Errorf("got root %v, want %v", b64e(got), b64e(want))
+			}
+			t.Log(tree)
+			if sz := tc.size; sz != 0 && sz&(sz-1) == 0 {
+				// A perfect tree should have a single hash matching the root.
+				hashes := tree.hashes()
+				if got, want := len(hashes), 1; got != want {
+					t.Fatalf("got %d hashes, want %d", got, want)
 				}
-				if !bytes.Equal(got, want) {
-					t.Errorf("Test(treesize=%v).nodes[i]=%x, want %x", test.size, got, want)
+				if got, want := hashes[0], mustGetRoot(t, tree); !bytes.Equal(got, want) {
+					t.Errorf("hashes[0] = %v, want %v", b64e(got), b64e(want))
 				}
 			}
+		})
+	}
+}
+
+func TestTreeNodes(t *testing.T) {
+	for _, tc := range []struct {
+		size uint64
+		want []NodeID
+	}{
+		{size: 0, want: []NodeID{}},
+		{size: 1, want: []NodeID{{Level: 0, Index: 0}}},
+		{size: 2, want: []NodeID{{Level: 1, Index: 0}}},
+		{size: 3, want: []NodeID{{Level: 1, Index: 0}, {Level: 0, Index: 2}}},
+		{size: 4, want: []NodeID{{Level: 2, Index: 0}}},
+		{size: 5, want: []NodeID{{Level: 2, Index: 0}, {Level: 0, Index: 4}}},
+		{size: 15, want: []NodeID{{Level: 3, Index: 0}, {Level: 2, Index: 2}, {Level: 1, Index: 6}, {Level: 0, Index: 14}}},
+		{size: 100, want: []NodeID{{Level: 6, Index: 0}, {Level: 5, Index: 2}, {Level: 2, Index: 24}}},
+		{size: 513, want: []NodeID{{Level: 9, Index: 0}, {Level: 0, Index: 512}}},
+		{size: uint64(1) << 63, want: []NodeID{{Level: 63, Index: 0}}},
+		{size: (uint64(1) << 63) + (uint64(1) << 57), want: []NodeID{{Level: 63, Index: 0}, {Level: 57, Index: 64}}},
+	} {
+		t.Run(fmt.Sprintf("size:%d", tc.size), func(t *testing.T) {
+			if got, want := TreeNodes(tc.size), tc.want; !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("TreeNodes: got %v, want %v", got, want)
+			}
+		})
+	}
+}
+
+func benchmarkAppendLeaf(b *testing.B, visit VisitFn) {
+	b.Helper()
+	const size = 1024
+	for n := 0; n < b.N; n++ {
+		tree := NewTree(rfc6962.DefaultHasher)
+		for i := 0; i < size; i++ {
+			l := []byte{byte(i & 0xff), byte((i >> 8) & 0xff)}
+			if _, err := tree.AppendLeaf(l, visit); err != nil {
+				b.Fatalf("AppendLeaf: %v", err)
+			}
+		}
+		if _, err := tree.CalculateRoot(visit); err != nil {
+			b.Fatalf("CalculateRoot: %v", err)
 		}
 	}
+}
+
+func BenchmarkAppendLeaf(b *testing.B) {
+	benchmarkAppendLeaf(b, func(NodeID, []byte) {})
+}
+
+func BenchmarkAppendLeafNoVisitor(b *testing.B) {
+	benchmarkAppendLeaf(b, nil)
 }

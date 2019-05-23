@@ -30,49 +30,30 @@ import (
 // to test code reading from multiple tree revisions. It cannot live in the main testonly
 // package as this creates import cycles.
 
-// NodeMapping is a struct we use because we can't use NodeIDs as map keys. Callers pass this
-// and FakeNodeReader internally manages derived keys.
-type NodeMapping struct {
-	NodeID storage.NodeID
-	Node   storage.Node
-}
-
 // FakeNodeReader is an implementation of storage.NodeReader that's preloaded with a set of
 // NodeID -> Node mappings and will return only those. Requesting any other nodes results in
 // an error. For use in tests only, does not implement any other storage APIs.
 type FakeNodeReader struct {
-	treeSize     int64
 	treeRevision int64
 	nodeMap      map[string]storage.Node
 }
 
-// NewFakeNodeReader creates and returns a FakeNodeReader with the supplied nodeID -> Node
-// mappings assuming that all the nodes are at a specified tree revision. All the nodeIDs
+// NewFakeNodeReader creates and returns a FakeNodeReader with the supplied nodes
+// assuming that all the nodes are at a specified tree revision. All the node IDs
 // must be distinct.
-func NewFakeNodeReader(mappings []NodeMapping, treeSize, treeRevision int64) *FakeNodeReader {
+func NewFakeNodeReader(nodes []storage.Node, treeRevision int64) *FakeNodeReader {
 	nodeMap := make(map[string]storage.Node)
 
-	for _, mapping := range mappings {
-		_, ok := nodeMap[mapping.NodeID.String()]
-
-		if ok {
-			// Duplicate mapping - the test data is invalid so don't continue
-			glog.Fatalf("NewFakeNodeReader duplicate mapping for: %s in:\n%v", mapping.NodeID.String(), mappings)
+	for _, node := range nodes {
+		id := node.NodeID.String()
+		if _, ok := nodeMap[id]; ok {
+			// Duplicate mapping - the test data is invalid so don't continue.
+			glog.Fatalf("NewFakeNodeReader duplicate mapping for: %s in:\n%v", id, nodes)
 		}
-
-		nodeMap[mapping.NodeID.String()] = mapping.Node
+		nodeMap[id] = node
 	}
 
-	return &FakeNodeReader{nodeMap: nodeMap, treeSize: treeSize, treeRevision: treeRevision}
-}
-
-// GetTreeRevisionIncludingSize implements the corresponding NodeReader API.
-func (f FakeNodeReader) GetTreeRevisionIncludingSize(treeSize int64) (int64, error) {
-	if f.treeSize < treeSize {
-		return int64(0), fmt.Errorf("GetTreeRevisionIncludingSize() got treeSize:%d, want: >= %d", treeSize, f.treeSize)
-	}
-
-	return f.treeRevision, nil
+	return &FakeNodeReader{nodeMap: nodeMap, treeRevision: treeRevision}
 }
 
 // GetMerkleNodes implements the corresponding NodeReader API.
@@ -139,36 +120,32 @@ func NewMultiFakeNodeReaderFromLeaves(batches []LeafBatch) *MultiFakeNodeReader 
 		}
 
 		lastBatchRevision = batch.TreeRevision
-		nodeMap := make(map[string]storage.Node)
+		nodeMap := make(map[compact.NodeID][]byte)
+		store := func(id compact.NodeID, hash []byte) { nodeMap[id] = hash }
 		for _, leaf := range batch.Leaves {
-			// We're only interested in the side effects of adding leaves - the node updates
-			tree.AddLeaf([]byte(leaf), func(depth int, index int64, hash []byte) error {
-				nID, err := storage.NewNodeIDForTreeCoords(int64(depth), index, 64)
-
-				if err != nil {
-					return fmt.Errorf("failed to create a nodeID for tree - should not happen d:%d i:%d",
-						depth, index)
-				}
-
-				nodeMap[nID.String()] = storage.Node{NodeID: nID, NodeRevision: batch.TreeRevision, Hash: hash}
-				return nil
-			})
+			// Only interested in side effects of AppendLeaf - the node updates.
+			tree.AppendLeaf([]byte(leaf), store)
 		}
-
+		// TODO(pavelkalinnikov): Use testing.T.Fatalf instead of panics.
+		root, err := tree.CalculateRoot(store) // Store the ephemeral nodes as well.
+		if err != nil {
+			panic(fmt.Errorf("CurrentRoot: %v", err))
+		}
 		// Sanity check the tree root hash against the one we expect to see.
-		if got, want := tree.CurrentRoot(), batch.ExpectedRoot; !bytes.Equal(got, want) {
+		if got, want := root, batch.ExpectedRoot; !bytes.Equal(got, want) {
 			panic(fmt.Errorf("NewMultiFakeNodeReaderFromLeaves() got root: %x, want: %x (%v)", got, want, batch))
 		}
 
-		// Unroll the update map to []NodeMappings to retain the most recent node update within
+		// Unroll the update map to []storage.Node to retain the most recent node update within
 		// the batch for each ID. Use that to create a new FakeNodeReader.
-		mappings := make([]NodeMapping, 0, len(nodeMap))
-
-		for _, node := range nodeMap {
-			mappings = append(mappings, NodeMapping{NodeID: node.NodeID, Node: node})
+		nodes := make([]storage.Node, 0, len(nodeMap))
+		for id, hash := range nodeMap {
+			nID := MustCreateNodeIDForTreeCoords(int64(id.Level), int64(id.Index), 64)
+			node := storage.Node{NodeID: nID, Hash: hash, NodeRevision: batch.TreeRevision}
+			nodes = append(nodes, node)
 		}
 
-		readers = append(readers, *NewFakeNodeReader(mappings, tree.Size(), batch.TreeRevision))
+		readers = append(readers, *NewFakeNodeReader(nodes, batch.TreeRevision))
 	}
 
 	return NewMultiFakeNodeReader(readers)
@@ -183,17 +160,6 @@ func (m MultiFakeNodeReader) readerForNodeID(nodeID storage.NodeID, revision int
 	}
 
 	return nil
-}
-
-// GetTreeRevisionIncludingSize implements the corresponding NodeReader API.
-func (m MultiFakeNodeReader) GetTreeRevisionIncludingSize(treeSize int64) (int64, int64, error) {
-	for i := len(m.readers) - 1; i >= 0; i-- {
-		if m.readers[i].treeSize >= treeSize {
-			return m.readers[i].treeRevision, m.readers[i].treeSize, nil
-		}
-	}
-
-	return int64(0), int64(0), fmt.Errorf("want revision for tree size: %d but it doesn't exist", treeSize)
 }
 
 // GetMerkleNodes implements the corresponding NodeReader API.

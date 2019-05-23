@@ -118,8 +118,8 @@ running and configured to:
    --port=3306` connects OK)
  - not require a password for the `root` user
 
-You can then set up the [expected tables](storage/mysql/storage.sql) in a `test`
-database like so:
+You can then set up the [expected tables](storage/mysql/schema/storage.sql) in a
+`test` database like so:
 
 ```bash
 ./scripts/resetdb.sh
@@ -183,10 +183,9 @@ the original files; if you do, you'll need to install the prerequisites:
 
   - `mockgen` tool from https://github.com/golang/mock
   - `stringer` tool from https://golang.org/x/tools/cmd/stringer
-  - `protoc`, [Go support for protoc](https://github.com/golang/protobuf) and
-     [grpc-gateway](https://github.com/grpc-ecosystem/grpc-gateway) (see
-     documentation linked from the
-     [protobuf site](https://github.com/google/protobuf))
+  - `protoc`, [Go support for protoc](https://github.com/golang/protobuf),
+     [grpc-gateway](https://github.com/grpc-ecosystem/grpc-gateway) and
+     [protoc-gen-doc](https://github.com/pseudomuto/protoc-gen-doc).
   - protocol buffer definitions for standard Google APIs:
 
     ```bash
@@ -241,6 +240,11 @@ go install -ldflags "-X 'main.version=$(git describe --tags)' -X 'main.commit=$(
 cd -
 ```
 
+#### Install [prototool](https://github.com/uber/prototool#installation)
+```bash
+go get -u github.com/uber/prototool/cmd/prototool
+```
+
 #### Run code generation, build, test and linters
 ```bash
 ./scripts/presubmit.sh
@@ -249,6 +253,7 @@ cd -
 #### Or just run the linters alone
 ```bash
 golangci-lint run
+prototool lint
 ```
 
 
