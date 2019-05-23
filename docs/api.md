@@ -781,8 +781,8 @@ that share a common prefix of `prefix_bits` with index.
 | ----- | ---- | ----- | ----------- |
 | map_id | [int64](#int64) |  |  |
 | revision | [int64](#int64) |  |  |
-| index | [bytes](#bytes) |  | index is the location of a leaf in the map. |
-| prefix_bits | [int32](#int32) |  | prefix_bits is the number of bits include |
+| prefix | [bytes](#bytes) |  |  |
+| prefix_bits | [int32](#int32) |  | prefix_bits is the number of bits include, starting from the most left, or most significant bit. |
 
 
 

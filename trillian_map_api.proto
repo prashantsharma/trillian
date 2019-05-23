@@ -83,9 +83,9 @@ message GetMapLeavesByRevisionRequest {
 message GetLastInRangeByRevisionRequest {
   int64 map_id = 1;
   int64 revision = 2;
-  // index is the location of a leaf in the map.
-  bytes index = 3;
-  // prefix_bits is the number of bits include 
+  bytes prefix = 3;
+  // prefix_bits is the number of bits include, starting from the most left, or 
+  // most significant bit.
   int32 prefix_bits = 4;
 }
 
