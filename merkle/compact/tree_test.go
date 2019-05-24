@@ -19,7 +19,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"math/bits"
-	"reflect"
 	"strings"
 	"testing"
 
@@ -33,7 +32,7 @@ import (
 // checkSizeInvariant ensures that the compact Merkle tree has the right number
 // of non-empty node hashes.
 func checkSizeInvariant(t *Tree) error {
-	size := uint64(t.Size())
+	size := t.Size()
 	hashes := t.hashes()
 	if got, want := len(hashes), bits.OnesCount64(size); got != want {
 		return fmt.Errorf("hashes mismatch: have %v hashes, want %v", got, want)
@@ -86,7 +85,7 @@ func TestAddingLeaves(t *testing.T) {
 						t.Fatalf("SizeInvariant check failed: %v", err)
 					}
 				}
-				if got, want := tree.Size(), int64(br); got != want {
+				if got, want := tree.Size(), uint64(br); got != want {
 					t.Errorf("Size()=%d, want %d", got, want)
 				}
 				if br > 0 {
@@ -159,9 +158,9 @@ func TestCompactVsFullTree(t *testing.T) {
 		return hashes
 	}
 
-	for i := int64(0); i < 1024; i++ {
-		hashes := getHashes(TreeNodes(uint64(imt.LeafCount())))
-		cmt, err := NewTreeWithState(rfc6962.DefaultHasher, imt.LeafCount(), hashes, imt.CurrentRoot().Hash())
+	for i := uint64(0); i < 1024; i++ {
+		hashes := getHashes(TreeNodes(i))
+		cmt, err := NewTreeWithState(rfc6962.DefaultHasher, i, hashes, imt.CurrentRoot().Hash())
 		if err != nil {
 			t.Errorf("interation %d: failed to create CMT with state: %v", i, err)
 		}
@@ -181,10 +180,10 @@ func TestCompactVsFullTree(t *testing.T) {
 		cSeq := cmt.Size() - 1 // The index of the last inserted leaf.
 
 		// In-Memory tree is 1-based for sequence numbers, since it's based on the original CT C++ impl.
-		if got, want := iSeq, i+1; got != want {
+		if got, want := uint64(iSeq), i+1; got != want {
 			t.Errorf("iteration %d: Got in-memory sequence number of %d, expected %d", i, got, want)
 		}
-		if int64(iSeq) != cSeq+1 {
+		if uint64(iSeq) != cSeq+1 {
 			t.Errorf("iteration %d: Got in-memory sequence number of %d but %d (zero based) from compact tree", i, iSeq, cSeq)
 		}
 		if a, b := iHash.Hash(), cHash; !bytes.Equal(a, b) {
@@ -203,7 +202,7 @@ func TestCompactVsFullTree(t *testing.T) {
 		if err != nil {
 			t.Fatalf("AppendLeaf(%d)=_,_,%v, want _,_,nil", i, err)
 		}
-		if got, want := cmt.Size(), i+1; got != want {
+		if got, want := cmt.Size(), uint64(i+1); got != want {
 			t.Fatalf("new tree size=%d, want %d", got, want)
 		}
 	}
@@ -216,7 +215,7 @@ func TestRootHashForVariousTreeSizes(t *testing.T) {
 	b64e := func(b []byte) string { return base64.StdEncoding.EncodeToString(b) }
 
 	for _, tc := range []struct {
-		size     int64
+		size     uint64
 		wantRoot []byte
 	}{
 		{0, testonly.MustDecodeBase64("47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=")},
@@ -234,7 +233,7 @@ func TestRootHashForVariousTreeSizes(t *testing.T) {
 	} {
 		t.Run(fmt.Sprintf("size:%d", tc.size), func(t *testing.T) {
 			tree := NewTree(rfc6962.DefaultHasher)
-			for i := int64(0); i < tc.size; i++ {
+			for i := uint64(0); i < tc.size; i++ {
 				l := []byte{byte(i & 0xff), byte((i >> 8) & 0xff)}
 				tree.AppendLeaf(l, nil)
 			}
@@ -251,31 +250,6 @@ func TestRootHashForVariousTreeSizes(t *testing.T) {
 				if got, want := hashes[0], mustGetRoot(t, tree); !bytes.Equal(got, want) {
 					t.Errorf("hashes[0] = %v, want %v", b64e(got), b64e(want))
 				}
-			}
-		})
-	}
-}
-
-func TestTreeNodes(t *testing.T) {
-	for _, tc := range []struct {
-		size uint64
-		want []NodeID
-	}{
-		{size: 0, want: []NodeID{}},
-		{size: 1, want: []NodeID{{Level: 0, Index: 0}}},
-		{size: 2, want: []NodeID{{Level: 1, Index: 0}}},
-		{size: 3, want: []NodeID{{Level: 1, Index: 0}, {Level: 0, Index: 2}}},
-		{size: 4, want: []NodeID{{Level: 2, Index: 0}}},
-		{size: 5, want: []NodeID{{Level: 2, Index: 0}, {Level: 0, Index: 4}}},
-		{size: 15, want: []NodeID{{Level: 3, Index: 0}, {Level: 2, Index: 2}, {Level: 1, Index: 6}, {Level: 0, Index: 14}}},
-		{size: 100, want: []NodeID{{Level: 6, Index: 0}, {Level: 5, Index: 2}, {Level: 2, Index: 24}}},
-		{size: 513, want: []NodeID{{Level: 9, Index: 0}, {Level: 0, Index: 512}}},
-		{size: uint64(1) << 63, want: []NodeID{{Level: 63, Index: 0}}},
-		{size: (uint64(1) << 63) + (uint64(1) << 57), want: []NodeID{{Level: 63, Index: 0}, {Level: 57, Index: 64}}},
-	} {
-		t.Run(fmt.Sprintf("size:%d", tc.size), func(t *testing.T) {
-			if got, want := TreeNodes(tc.size), tc.want; !reflect.DeepEqual(got, tc.want) {
-				t.Fatalf("TreeNodes: got %v, want %v", got, want)
 			}
 		})
 	}

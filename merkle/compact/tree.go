@@ -46,9 +46,9 @@ type Tree struct {
 //
 // The expectedRoot is the known-good tree root of the tree at the specified
 // size, and is used to verify the initial state.
-func NewTreeWithState(hasher hashers.LogHasher, size int64, hashes [][]byte, expectedRoot []byte) (*Tree, error) {
+func NewTreeWithState(hasher hashers.LogHasher, size uint64, hashes [][]byte, expectedRoot []byte) (*Tree, error) {
 	fact := RangeFactory{Hash: hasher.HashChildren}
-	rng, err := fact.NewRange(0, uint64(size), hashes)
+	rng, err := fact.NewRange(0, size, hashes)
 	if err != nil {
 		return nil, err
 	}
@@ -142,31 +142,12 @@ func (t *Tree) AppendLeafHash(leafHash []byte, visit VisitFn) error {
 }
 
 // Size returns the current size of the tree.
-func (t *Tree) Size() int64 {
-	return int64(t.rng.End())
+func (t *Tree) Size() uint64 {
+	return t.rng.End()
 }
 
 // hashes returns the set of node hashes that comprise the compact
 // representation of the tree.
 func (t *Tree) hashes() [][]byte {
 	return t.rng.Hashes()
-}
-
-// TreeNodes returns the list of node IDs that comprise a compact tree, in the
-// same order they are used in compact.Tree and compact.Range, i.e. ordered
-// from upper to lower levels.
-func TreeNodes(size uint64) []NodeID {
-	ids := make([]NodeID, 0, bits.OnesCount64(size))
-	// Iterate over perfect subtrees along the right border of the tree. Those
-	// correspond to the bits of the tree size that are set to one.
-	for sz := size; sz != 0; sz &= sz - 1 {
-		level := uint(bits.TrailingZeros64(sz))
-		index := (sz - 1) >> level
-		ids = append(ids, NewNodeID(level, index))
-	}
-	// Note: Right border nodes of compact.Range are ordered from root to leaves.
-	for i, j := 0, len(ids)-1; i < j; i, j = i+1, j-1 {
-		ids[i], ids[j] = ids[j], ids[i]
-	}
-	return ids
 }
